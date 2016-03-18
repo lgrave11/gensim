@@ -253,7 +253,7 @@ class LdaVowpalWabbit(utils.SaveLoad):
             else:
                 topic = self.show_topic(i, topn=num_words)
 
-            shown.append(topic)
+            shown.append((i, topic))
 
             if log:
                 LOG.info("topic #%i (%.3f): %s", i, self.alpha, topic)
@@ -261,14 +261,31 @@ class LdaVowpalWabbit(utils.SaveLoad):
         return shown
 
     def print_topic(self, topicid, topn=10):
-        return ' + '.join(['{0:.3f}*{1}'.format(v[0], v[1])
-                           for v in self.show_topic(topicid, topn)])
+        """Return the result of `show_topic`, but formatted as a single string."""
+        return ' + '.join(['%.3f*%s' % (v, k)  for k, v in self.show_topic(topicid, topn)])
 
     def show_topic(self, topicid, topn=10):
+        """
+        Return a list of `(word, probability)` 2-tuples for the most probable
+        words in topic `topicid`.
+
+        Only return 2-tuples for the topn most probable words (ignore the rest).
+
+        """
+        return [(self.id2word[id], value) for id, value in self.get_topic_terms(topicid, topn)]
+
+    def get_topic_terms(self, topicid, topn=10):
+        """
+        Return a list of `(word_id, probability)` 2-tuples for the most
+        probable words in topic `topicid`.
+
+        Only return 2-tuples for the topn most probable words (ignore the rest).
+
+        """
         topics = self._get_topics()
         topic = topics[topicid]
         bestn = matutils.argsort(topic, topn, reverse=True)
-        return [(topic[t_id], self.id2word[t_id]) for t_id in bestn]
+        return [(id, topic[id]) for id in bestn]
 
     def save(self, fname, *args, **kwargs):
         """Serialise this model to file with given name."""
@@ -437,7 +454,9 @@ class LdaVowpalWabbit(utils.SaveLoad):
 
         return predictions, vw_data
 
-    def __getitem__(self, bow, eps=0.01):
+    def get_document_topics(self, bow, minimum_probability=0.01):
+        minimum_probability = max(abs(minimum_probability), 1e-8)  # never allow zero values in sparse output
+
         is_corpus, dummy_corpus = utils.is_corpus(bow)
         if not is_corpus:
             bow = [bow]
@@ -448,11 +467,21 @@ class LdaVowpalWabbit(utils.SaveLoad):
         for row in predictions:
             row_topics = []
             for topic_id, val in enumerate(row):
-                if val > eps:
+                if val > minimum_probability:
                     row_topics.append((topic_id, val))
             topics.append(row_topics)
 
         return topics if is_corpus else topics[0]
+
+    def __getitem__(self, bow, eps=0.01):
+        """
+        Return topic distribution for the given document `bow`, as a list of
+        (topic_id, topic_probability) 2-tuples.
+
+        Ignore topics with very low probability (below `eps`).
+
+        """
+        return self.get_document_topics(bow, eps)
 
     def _get_filename(self, name):
         """Get path to given filename in temp directory."""
